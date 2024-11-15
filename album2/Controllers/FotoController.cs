@@ -17,7 +17,7 @@ namespace album2.Controllers
 
         public FotoController(IWebHostEnvironment env, ApplicationDbContext context)
         {
-            this.env = env ?? throw new ArgumentNullException(nameof(env)); // Verifica si _env es null 
+            this.env = env ?? throw new ArgumentNullException(nameof(env)); // Verifica si env es null 
             this.context = context;
         }
 
@@ -38,12 +38,18 @@ namespace album2.Controllers
             }
             if (fotoR.nombre.Length > 0 )
             {
-                var extensionFoto = Path.GetExtension(fotoR.foto.FileName.ToLower());
-                var nomFoto = fotoR.nombre + extensionFoto;
+                var nomSinEspacios = fotoR.nombre.Replace(" ", "_");
+                var extensionFoto = Path.GetExtension(fotoR.foto.FileName.ToLower());//obtener la extension original de la foto
+                if (extensionFoto != ".png" && extensionFoto != ".jpg" && extensionFoto != ".jpeg")
+                {
+                    extensionFoto = ".png"; 
+                }
+
+                var nomFoto = nomSinEspacios + extensionFoto;
                 // Obtener la ruta física del wwwroot
                 var rutaF = Path.Combine(env.WebRootPath, "imagenes", nomFoto); // Guardar en wwwroot/imagenes
 
-                var existeFoto = await context.Fotos.AnyAsync(x => x.nombre == fotoR.nombre); 
+                var existeFoto = await context.Fotos.AnyAsync(x => x.nombre == nomSinEspacios); 
                 if (existeFoto)
                 {
                     respuesta = new Entities.Response()
@@ -56,7 +62,7 @@ namespace album2.Controllers
                 }
                 Foto fotito = new Foto()
                 {
-                    nombre = fotoR.nombre,
+                    nombre = nomSinEspacios,
                     descripcion = fotoR.descripcion,
                     ruta = Path.Combine("/imagenes", nomFoto),// Ruta relativa para almacenar en la base de datos
                     UsuarioId = fotoR.userId
@@ -90,8 +96,6 @@ namespace album2.Controllers
         public async Task<ActionResult> VerFotosPorUsuario(string userId)
         {
             Entities.Response resp;
-
-            // Verificar si el usuario existe
             var usuarioExiste = await context.Usuarios.AnyAsync(u => u.Id == userId);
             if (!usuarioExiste)
             {
@@ -103,9 +107,13 @@ namespace album2.Controllers
                 return NotFound(resp);
             }
 
-            // Obtener las fotos del usuario
             var fotos = await context.Fotos
                 .Where(f => f.UsuarioId == userId)
+                .Select(f => new
+                {
+                    Nombre = f.nombre,
+                    Descripcion = f.descripcion
+                })
                 .ToListAsync();
 
             if (fotos.Count == 0)
@@ -117,47 +125,9 @@ namespace album2.Controllers
                 };
                 return Ok(resp);
             }
-
-            // Solo retornar la primera foto como ejemplo
-
-            //var fotos = await fotos.Where(x => x.UsuarioId == userId).tol
-            foreach (var foto in fotos)
-            {
-                if (foto != null)
-                {
-                    var extFoto = Path.GetExtension(foto.ruta);
-                    var rutaImg = Path.Combine(env.WebRootPath, "imagenes", foto.nombre + extFoto); // Ruta absoluta
-
-                    if (!System.IO.File.Exists(rutaImg))
-                    {
-                        var imgB = await System.IO.File.ReadAllBytesAsync(rutaImg);
-
-                        string mimeType = extFoto switch
-                        {
-                            ".png" => "image/png",
-                            ".jpg" => "image/jpeg",
-                            ".jpeg" => "image/jpeg",
-                            ".gif" => "image/gif",
-                            _ => "application/octet-stream"
-                        };
-
-                        return File(imgB, mimeType); // Retornar la imagen directamente
-                    }
-                    else
-                    {
-                        resp = new Entities.Response()
-                        {
-                            CodResp = "404",
-                            respuesta = "La imagen no se encontró en el servidor"
-                        };
-                        return NotFound(resp);
-                    }
-                }
-            }
-            
-
-            return BadRequest("No se encontraron imágenes.");
+            return Ok(fotos);
         }
+
         [HttpGet("VerFotoPorNombre/{nombre}")]
         public async Task<IActionResult> VerFotoPorNombre(string nombre)
         {
@@ -208,6 +178,7 @@ namespace album2.Controllers
 
             return File(imgB, mimeType);
         }
+
         [HttpPut("ActualizarFoto/{fotoId}")]
         public async Task<IActionResult> ActualizarFoto(int fotoId,ActualizarFotoDTO fotoAct)
         {
@@ -220,10 +191,18 @@ namespace album2.Controllers
                     respuesta = "La foto no existe en la base de datos"
                 });
             }
-            // Actualizar los campos que están presentes en el request
-            if (!string.IsNullOrEmpty(fotoAct.nombre))
+            var extFoto = Path.GetExtension(foto.ruta);
+            var nombreConEspaciosReemplazados = fotoAct.nombre?.Replace(" ", "_"); // Reemplazar espacios por guiones bajos
+            var rutaImgActual = Path.Combine(env.WebRootPath, "imagenes", foto.nombre + extFoto);
+
+            if (!string.IsNullOrEmpty(nombreConEspaciosReemplazados))
             {
-                foto.nombre = fotoAct.nombre;
+                var rutaImgNueva = Path.Combine(env.WebRootPath, "imagenes", nombreConEspaciosReemplazados + extFoto);
+                if (System.IO.File.Exists(rutaImgActual))
+                {
+                    System.IO.File.Move(rutaImgActual, rutaImgNueva);
+                }
+                foto.nombre = nombreConEspaciosReemplazados;
             }
 
             if (!string.IsNullOrEmpty(fotoAct.descripcion))
@@ -242,11 +221,12 @@ namespace album2.Controllers
                 
             });
         }
+
         [HttpDelete("EliminarFoto{id:int}")]
-        public async Task<ActionResult> EliminarFoto(int Id, IMapper mapper)
+        public async Task<ActionResult> EliminarFoto(int id, IMapper mapper)
         {
 
-            var foto = await context.Fotos.FirstOrDefaultAsync(x => x.Id == Id); 
+            var foto = await context.Fotos.FirstOrDefaultAsync(x => x.Id == id); 
             if (foto == null)
             {
                 return NotFound(new { mensaje = "La foto no existe en la base de datos" });
@@ -258,7 +238,7 @@ namespace album2.Controllers
             {
                 System.IO.File.Delete(rutaImg);
             }
-                // Eliminar el registro de la foto de la base de datos
+            // Eliminar el registro de la foto de la base de datos
             context.Fotos.Remove(foto);
             await context.SaveChangesAsync();
             return Ok(new { mensaje = "Foto eliminada correctamente" });
